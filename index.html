@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Hand Tracking</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mediapipe/0.10.8/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0f;
+      color: #e8e4f0;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    header {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      padding: 18px 32px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(10,10,15,0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(160,120,255,0.12);
+      z-index: 10;
+    }
+
+    .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #a07cff;
+      box-shadow: 0 0 8px #a07cff88;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.8); }
+    }
+
+    header h1 {
+      font-size: 13px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: #a07cff;
+      font-weight: 400;
+    }
+
+    .stage {
+      position: relative;
+      width: min(90vw, 720px);
+      aspect-ratio: 4/3;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid rgba(160,120,255,0.18);
+      box-shadow: 0 0 60px rgba(160,120,255,0.08), 0 0 0 1px rgba(160,120,255,0.06);
+    }
+
+    video {
+      position: absolute;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+      opacity: 0;
+    }
+
+    canvas#output {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .overlay-start {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: rgba(10,10,15,0.92);
+      z-index: 5;
+      transition: opacity 0.4s;
+    }
+
+    .overlay-start.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .cam-icon {
+      font-size: 48px;
+      line-height: 1;
+    }
+
+    .overlay-start p {
+      font-size: 12px;
+      color: #7060a0;
+      letter-spacing: 0.12em;
+    }
+
+    button#startBtn {
+      padding: 10px 28px;
+      background: transparent;
+      border: 1px solid rgba(160,120,255,0.4);
+      border-radius: 6px;
+      color: #a07cff;
+      font-family: inherit;
+      font-size: 12px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    button#startBtn:hover {
+      background: rgba(160,120,255,0.1);
+      border-color: #a07cff;
+    }
+
+    .stats {
+      position: absolute;
+      top: 14px; left: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 4;
+    }
+
+    .stat-pill {
+      padding: 4px 10px;
+      background: rgba(10,10,15,0.7);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(160,120,255,0.2);
+      border-radius: 20px;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      color: #a07cff;
+    }
+
+    footer {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      padding: 12px 32px;
+      font-size: 10px;
+      color: #3a3050;
+      letter-spacing: 0.1em;
+      text-align: center;
+      background: rgba(10,10,15,0.6);
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="dot"></div>
+    <h1>Hand Tracking</h1>
+  </header>
+
+  <div class="stage">
+    <video id="webcam" playsinline></video>
+    <canvas id="output"></canvas>
+
+    <div class="stats">
+      <div class="stat-pill" id="handCount">Hands: 0</div>
+      <div class="stat-pill" id="fingerCount">Fingers: —</div>
+    </div>
+
+    <div class="overlay-start" id="overlay">
+      <div class="cam-icon">🤚</div>
+      <p>REQUIRES CAMERA ACCESS</p>
+      <button id="startBtn">START TRACKING</button>
+    </div>
+  </div>
+
+  <footer>MediaPipe Hands · Real-time 21-landmark detection</footer>
+
+  <!-- MediaPipe Hands -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466124/drawing_utils.js" crossorigin="anonymous"></script>
+
+  <script>
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('output');
+    const ctx = canvas.getContext('2d');
+    const overlay = document.getElementById('overlay');
+    const startBtn = document.getElementById('startBtn');
+    const handCountEl = document.getElementById('handCount');
+    const fingerCountEl = document.getElementById('fingerCount');
+
+    // Finger tip landmark indices
+    const FINGERTIPS = [4, 8, 12, 16, 20];
+    const FINGER_BASES = [2, 6, 10, 14, 18];
+
+    // Colors
+    const PALETTE = {
+      connection: 'rgba(160,120,255,0.6)',
+      landmark: '#a07cff',
+      tip: '#e0d0ff',
+      glow: 'rgba(160,120,255,0.25)',
+    };
+
+    let hands = null;
+    let animFrameId = null;
+
+    function countFingers(landmarks, handLabel) {
+      let count = 0;
+      // Thumb: direction depends on hand side
+      // MediaPipe reports "Left"/"Right" from the camera's perspective (before mirroring).
+      // After we mirror the canvas, a camera-"Left" hand appears on screen as the user's right hand.
+      // So we flip the comparison: camera-Left → tip.x > base.x to count as extended.
+      if (handLabel === 'Left') {
+        if (landmarks[4].x > landmarks[3].x) count++;
+      } else {
+        if (landmarks[4].x < landmarks[3].x) count++;
+      }
+      // Other 4 fingers: tip y < base y means extended
+      for (let i = 1; i < 5; i++) {
+        if (landmarks[FINGERTIPS[i]].y < landmarks[FINGER_BASES[i]].y) count++;
+      }
+      return count;
+    }
+
+    function drawHand(landmarks, W, H) {
+      // Draw connections with gradient glow
+      const CONNECTIONS = [
+        [0,1],[1,2],[2,3],[3,4],
+        [0,5],[5,6],[6,7],[7,8],
+        [0,9],[9,10],[10,11],[11,12],
+        [0,13],[13,14],[14,15],[15,16],
+        [0,17],[17,18],[18,19],[19,20],
+        [5,9],[9,13],[13,17]
+      ];
+
+      ctx.save();
+      CONNECTIONS.forEach(([a, b]) => {
+        const ax = landmarks[a].x * W;
+        const ay = landmarks[a].y * H;
+        const bx = landmarks[b].x * W;
+        const by = landmarks[b].y * H;
+
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.strokeStyle = PALETTE.connection;
+        ctx.lineWidth = 2;
+        ctx.shadowColor = '#a07cff';
+        ctx.shadowBlur = 8;
+        ctx.stroke();
+      });
+      ctx.restore();
+
+      // Draw landmarks
+      landmarks.forEach((lm, i) => {
+        const x = lm.x * W;
+        const y = lm.y * H;
+        const isTip = FINGERTIPS.includes(i);
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, isTip ? 6 : 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = isTip ? PALETTE.tip : PALETTE.landmark;
+        ctx.shadowColor = '#a07cff';
+        ctx.shadowBlur = isTip ? 18 : 8;
+        ctx.fill();
+
+        if (isTip) {
+          // Outer ring on tips
+          ctx.beginPath();
+          ctx.arc(x, y, 10, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(160,120,255,0.35)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+        ctx.restore();
+      });
+    }
+
+    function renderFrame() {
+      const W = canvas.width;
+      const H = canvas.height;
+
+      ctx.clearRect(0, 0, W, H);
+
+      // Mirror-draw video frame
+      ctx.save();
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, -W, 0, W, H);
+      ctx.restore();
+
+      // Dark tint
+      ctx.fillStyle = 'rgba(10,10,15,0.35)';
+      ctx.fillRect(0, 0, W, H);
+
+      animFrameId = requestAnimationFrame(renderFrame);
+    }
+
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 960 }, facingMode: 'user' }
+        });
+        video.srcObject = stream;
+        await video.play();
+
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+
+        overlay.classList.add('hidden');
+        renderFrame();
+        initHands();
+      } catch (e) {
+        startBtn.textContent = 'Camera denied';
+        startBtn.style.color = '#ff6060';
+        startBtn.style.borderColor = 'rgba(255,96,96,0.4)';
+      }
+    }
+
+    function initHands() {
+      hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`
+      });
+
+      hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.6,
+      });
+
+      hands.onResults((results) => {
+        const W = canvas.width;
+        const H = canvas.height;
+
+        const numHands = results.multiHandLandmarks?.length || 0;
+        handCountEl.textContent = `Hands: ${numHands}`;
+
+        if (numHands > 0) {
+          let totalFingers = 0;
+          results.multiHandLandmarks.forEach((landmarks, i) => {
+            // Mirror landmarks (video is flipped)
+            const mirrored = landmarks.map(lm => ({ ...lm, x: 1 - lm.x }));
+            const handLabel = results.multiHandedness?.[i]?.label || 'Right';
+            drawHand(mirrored, W, H);
+            totalFingers += countFingers(mirrored, handLabel);
+          });
+          fingerCountEl.textContent = `Fingers: ${totalFingers}`;
+        } else {
+          fingerCountEl.textContent = 'Fingers: —';
+        }
+      });
+
+      // Feed frames to MediaPipe
+      async function detect() {
+        if (video.readyState >= 2) {
+          await hands.send({ image: video });
+        }
+        setTimeout(detect, 33); // ~30fps detection
+      }
+      detect();
+    }
+
+    startBtn.addEventListener('click', startCamera);
+  </script>
+</body>
+</html>
