@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>✨ Dream Draw — วาดด้วยมือ</title>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Nunito', sans-serif;
+      background: #0a0015;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* ---- Video & Canvas ---- */
+    .scene {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    video {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+      opacity: 0.55;
+    }
+
+    canvas {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+      pointer-events: none;
+    }
+
+    #landmarksCanvas { z-index: 5; }
+    #drawingCanvas   { z-index: 10; }
+    #sparkleCanvas   { z-index: 15; }
+
+    /* ---- Top Status Badge ---- */
+    #statusBar {
+      position: absolute;
+      top: 18px; left: 50%; transform: translateX(-50%);
+      z-index: 50;
+      display: flex; gap: 10px; align-items: center;
+    }
+
+    .badge {
+      display: flex; align-items: center; gap: 6px;
+      background: rgba(255,255,255,0.18);
+      backdrop-filter: blur(12px);
+      border: 1.5px solid rgba(255,255,255,0.35);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-size: 13px; font-weight: 700;
+      color: #fff;
+      transition: all 0.3s;
+    }
+
+    .badge .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #aaa;
+    }
+
+    .badge.draw .dot  { background: #6dffb8; box-shadow: 0 0 6px #6dffb8; }
+    .badge.erase .dot { background: #ff8ecf; box-shadow: 0 0 6px #ff8ecf; }
+    .badge.idle .dot  { background: #ffe06d; box-shadow: 0 0 6px #ffe06d; }
+
+    /* ---- Floating Toolbar ---- */
+    #toolbar {
+      position: absolute;
+      bottom: 28px; left: 50%; transform: translateX(-50%);
+      z-index: 50;
+      display: flex; align-items: center; gap: 10px;
+      background: rgba(255,255,255,0.14);
+      backdrop-filter: blur(20px);
+      border: 1.5px solid rgba(255,255,255,0.3);
+      border-radius: 24px;
+      padding: 10px 16px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+
+    .tb-label {
+      font-size: 11px; font-weight: 800;
+      color: rgba(255,255,255,0.5);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 0 4px;
+    }
+
+    .tb-divider {
+      width: 1px; height: 32px;
+      background: rgba(255,255,255,0.2);
+    }
+
+    /* Color Swatches */
+    .swatch {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      cursor: pointer;
+      border: 2.5px solid rgba(255,255,255,0.3);
+      transition: transform 0.15s, border-color 0.15s;
+      flex-shrink: 0;
+    }
+    .swatch:hover { transform: scale(1.2); }
+    .swatch.active {
+      border-color: #fff;
+      transform: scale(1.25);
+      box-shadow: 0 0 10px rgba(255,255,255,0.5);
+    }
+
+    /* Brush size */
+    .size-btn {
+      border: none; background: rgba(255,255,255,0.2);
+      border-radius: 50%; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s; color: #fff; flex-shrink: 0;
+    }
+    .size-btn:hover { background: rgba(255,255,255,0.35); transform: scale(1.1); }
+    .size-btn.active { background: rgba(255,255,255,0.45); box-shadow: 0 0 8px rgba(255,255,255,0.4); }
+
+    .size-sm { width: 28px; height: 28px; }
+    .size-md { width: 32px; height: 32px; }
+    .size-lg { width: 36px; height: 36px; }
+
+    .size-dot {
+      border-radius: 50%;
+      background: #fff;
+      pointer-events: none;
+    }
+
+    /* Clear button */
+    #clearBtn {
+      border: none;
+      background: rgba(255,100,150,0.35);
+      border-radius: 14px;
+      padding: 6px 14px;
+      color: #fff; font-family: 'Nunito', sans-serif;
+      font-size: 13px; font-weight: 800;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    #clearBtn:hover {
+      background: rgba(255,100,150,0.6);
+      transform: scale(1.05);
+    }
+    #clearBtn:active { transform: scale(0.97); }
+
+    /* ---- Title ---- */
+    #title {
+      position: absolute;
+      top: 18px; left: 22px;
+      z-index: 50;
+      font-size: 18px; font-weight: 800;
+      color: rgba(255,255,255,0.85);
+      letter-spacing: -0.01em;
+      pointer-events: none;
+    }
+    #title span { color: #ffb7d5; }
+
+    /* ---- Help hint ---- */
+    #hint {
+      position: absolute;
+      top: 18px; right: 22px;
+      z-index: 50;
+      font-size: 12px; font-weight: 600;
+      color: rgba(255,255,255,0.45);
+      line-height: 1.7;
+      text-align: right;
+      pointer-events: none;
+    }
+
+    /* ---- Loading overlay ---- */
+    #loadingOverlay {
+      position: absolute; inset: 0;
+      z-index: 100;
+      background: radial-gradient(ellipse at 40% 50%, #2d0050 0%, #0a0015 80%);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 16px;
+      transition: opacity 0.8s;
+    }
+    #loadingOverlay.hidden { opacity: 0; pointer-events: none; }
+
+    .loading-emoji { font-size: 52px; animation: bounce 1s ease-in-out infinite; }
+    @keyframes bounce {
+      0%,100% { transform: translateY(0); }
+      50%      { transform: translateY(-12px); }
+    }
+
+    .loading-title {
+      font-size: 22px; font-weight: 800;
+      color: #fff;
+    }
+
+    .loading-sub {
+      font-size: 14px; color: rgba(255,255,255,0.5);
+      font-weight: 600;
+    }
+
+    .loading-dots {
+      display: flex; gap: 8px; margin-top: 4px;
+    }
+    .loading-dots span {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #ffb7d5;
+      animation: ldot 1.2s ease-in-out infinite;
+    }
+    .loading-dots span:nth-child(2) { animation-delay: 0.2s; background: #b7d5ff; }
+    .loading-dots span:nth-child(3) { animation-delay: 0.4s; background: #b7ffd5; }
+    @keyframes ldot {
+      0%,80%,100% { transform: scale(0.6); opacity:0.5; }
+      40%          { transform: scale(1.2); opacity:1; }
+    }
+
+    /* ---- Pinch animation ring ---- */
+    .pinch-ring {
+      position: absolute;
+      border-radius: 50%;
+      border: 3px solid rgba(255,255,255,0.7);
+      pointer-events: none;
+      z-index: 20;
+      transform: translate(-50%,-50%) scale(0);
+      transition: transform 0.1s, opacity 0.1s;
+      opacity: 0;
+    }
+    .pinch-ring.active {
+      transform: translate(-50%,-50%) scale(1);
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+
+<div id="loadingOverlay">
+  <div class="loading-emoji">✨</div>
+  <div class="loading-title">Dream Draw</div>
+  <div class="loading-sub">กำลังเปิดกล้องและโหลด AI…</div>
+  <div class="loading-dots"><span></span><span></span><span></span></div>
+</div>
+
+<div class="scene">
+  <div id="title">✨ <span>Dream</span>Draw</div>
+
+  <div id="hint">
+    🤏 จีบนิ้วโป้ง+ชี้ เพื่อวาด<br>
+    ✌️ มือซ้าย = ยางลบ
+  </div>
+
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="landmarksCanvas"></canvas>
+  <canvas id="drawingCanvas"></canvas>
+  <canvas id="sparkleCanvas"></canvas>
+
+  <!-- Status badges -->
+  <div id="statusBar">
+    <div class="badge idle" id="rightBadge">
+      <div class="dot"></div>มือขวา: พัก
+    </div>
+    <div class="badge idle" id="leftBadge">
+      <div class="dot"></div>มือซ้าย: พัก
+    </div>
+  </div>
+
+  <!-- Pinch cursor rings -->
+  <div class="pinch-ring" id="rightRing" style="width:36px;height:36px;border-color:#b7ffd5;"></div>
+  <div class="pinch-ring" id="leftRing"  style="width:60px;height:60px;border-color:#ffb7d5;"></div>
+
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <div class="tb-label">สี</div>
+
+    <div class="swatch active" style="background:#ffffff;"      data-color="#ffffff"      title="ขาว"></div>
+    <div class="swatch"        style="background:#ff79c6;"      data-color="#ff79c6"      title="ชมพู"></div>
+    <div class="swatch"        style="background:#bd93f9;"      data-color="#bd93f9"      title="ม่วง"></div>
+    <div class="swatch"        style="background:#8be9fd;"      data-color="#8be9fd"      title="ฟ้า"></div>
+    <div class="swatch"        style="background:#50fa7b;"      data-color="#50fa7b"      title="เขียว"></div>
+    <div class="swatch"        style="background:#ffb86c;"      data-color="#ffb86c"      title="ส้ม"></div>
+    <div class="swatch"        style="background:#f1fa8c;"      data-color="#f1fa8c"      title="เหลือง"></div>
+    <div class="swatch"        style="background:#ff5555;"      data-color="#ff5555"      title="แดง"></div>
+
+    <div class="tb-divider"></div>
+    <div class="tb-label">ขนาด</div>
+
+    <button class="size-btn size-sm" data-size="4"  title="เล็ก">
+      <div class="size-dot" style="width:5px;height:5px;"></div>
+    </button>
+    <button class="size-btn size-md active" data-size="8"  title="กลาง">
+      <div class="size-dot" style="width:9px;height:9px;"></div>
+    </button>
+    <button class="size-btn size-lg" data-size="16" title="ใหญ่">
+      <div class="size-dot" style="width:14px;height:14px;"></div>
+    </button>
+
+    <div class="tb-divider"></div>
+
+    <button id="clearBtn">🗑 ล้างทั้งหมด</button>
+  </div>
+</div>
+
+<script>
+  // ---- State ----
+  const state = {
+    color: '#ffffff',
+    brushSize: 8,
+    isPinching: { Right: false, Left: false },
+    lastPos:    { Right: null,  Left: null  },
+  };
+
+  // ---- Elements ----
+  const videoEl         = document.getElementById('video');
+  const drawingCanvas   = document.getElementById('drawingCanvas');
+  const drawingCtx      = drawingCanvas.getContext('2d');
+  const landmarksCanvas = document.getElementById('landmarksCanvas');
+  const landmarksCtx    = landmarksCanvas.getContext('2d');
+  const sparkleCanvas   = document.getElementById('sparkleCanvas');
+  const sparkleCtx      = sparkleCanvas.getContext('2d');
+
+  const rightBadge = document.getElementById('rightBadge');
+  const leftBadge  = document.getElementById('leftBadge');
+  const rightRing  = document.getElementById('rightRing');
+  const leftRing   = document.getElementById('leftRing');
+
+  // ---- Resize ----
+  function resizeCanvases() {
+    [drawingCanvas, landmarksCanvas, sparkleCanvas].forEach(c => {
+      c.width  = window.innerWidth;
+      c.height = window.innerHeight;
+    });
+  }
+  window.addEventListener('resize', resizeCanvases);
+  resizeCanvases();
+
+  // ---- Toolbar: swatches ----
+  document.querySelectorAll('.swatch').forEach(el => {
+    el.addEventListener('click', () => {
+      document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+      el.classList.add('active');
+      state.color = el.dataset.color;
+    });
+  });
+
+  // ---- Toolbar: sizes ----
+  document.querySelectorAll('.size-btn').forEach(el => {
+    el.addEventListener('click', () => {
+      document.querySelectorAll('.size-btn').forEach(s => s.classList.remove('active'));
+      el.classList.add('active');
+      state.brushSize = parseInt(el.dataset.size);
+    });
+  });
+
+  // ---- Clear ----
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+    spawnClearBurst();
+  });
+
+  // ---- Sparkles ----
+  const particles = [];
+
+  function spawnSparkle(x, y, color) {
+    for (let i = 0; i < 3; i++) {
+      particles.push({
+        x, y,
+        vx: (Math.random() - 0.5) * 3,
+        vy: (Math.random() - 0.5) * 3 - 1,
+        life: 1,
+        size: Math.random() * 4 + 2,
+        color,
+      });
+    }
+  }
+
+  function spawnClearBurst() {
+    const colors = ['#ff79c6','#bd93f9','#8be9fd','#50fa7b','#f1fa8c'];
+    for (let i = 0; i < 60; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = Math.random() * 8 + 2;
+      particles.push({
+        x: window.innerWidth / 2,
+        y: window.innerHeight / 2,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 1,
+        size: Math.random() * 6 + 2,
+        color: colors[Math.floor(Math.random() * colors.length)],
+      });
+    }
+  }
+
+  function tickSparkles() {
+    sparkleCtx.clearRect(0, 0, sparkleCanvas.width, sparkleCanvas.height);
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.1;
+      p.life -= 0.035;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      sparkleCtx.save();
+      sparkleCtx.globalAlpha = p.life;
+      sparkleCtx.fillStyle = p.color;
+      sparkleCtx.beginPath();
+      // star shape
+      sparkleCtx.translate(p.x, p.y);
+      for (let j = 0; j < 4; j++) {
+        sparkleCtx.rotate(Math.PI / 2);
+        sparkleCtx.moveTo(0, 0);
+        sparkleCtx.lineTo(p.size / 2, p.size / 2);
+        sparkleCtx.lineTo(0, p.size);
+        sparkleCtx.lineTo(-p.size / 2, p.size / 2);
+      }
+      sparkleCtx.closePath();
+      sparkleCtx.fill();
+      sparkleCtx.restore();
+    }
+    requestAnimationFrame(tickSparkles);
+  }
+  tickSparkles();
+
+  // ---- Distance ----
+  function dist(p1, p2) {
+    return Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2);
+  }
+
+  // ---- Dynamic pinch threshold based on palm size ----
+  function getPinchThreshold(landmarks) {
+    // distance between wrist (0) and middle finger MCP (9) as scale ref
+    const ref = dist(landmarks[0], landmarks[9]);
+    return ref * 0.45; // ~45% of palm width
+  }
+
+  // ---- Update badge ----
+  function updateBadge(badge, mode) {
+    badge.className = 'badge ' + mode;
+    const hand = badge.id === 'rightBadge' ? 'มือขวา' : 'มือซ้าย';
+    const labels = { draw: '✏️ กำลังวาด', erase: '🧹 กำลังลบ', idle: '💤 พัก' };
+    badge.innerHTML = `<div class="dot"></div>${hand}: ${mode === 'draw' ? 'วาด' : mode === 'erase' ? 'ลบ' : 'พัก'}`;
+  }
+
+  // ---- Move cursor ring ----
+  function moveRing(ring, xRaw, yRaw, active) {
+    // xRaw is in landmark space (0–1), canvas is flipped, so mirror x
+    const x = (1 - xRaw) * window.innerWidth;
+    const y = yRaw * window.innerHeight;
+    ring.style.left = x + 'px';
+    ring.style.top  = y + 'px';
+    ring.classList.toggle('active', active);
+  }
+
+  // ---- Draw hand landmarks ----
+  function drawLandmarks(ctx, landmarks) {
+    const W = ctx.canvas.width, H = ctx.canvas.height;
+    // connections (subset for prettiness)
+    const connections = [
+      [0,1],[1,2],[2,3],[3,4],
+      [0,5],[5,6],[6,7],[7,8],
+      [5,9],[9,10],[10,11],[11,12],
+      [9,13],[13,14],[14,15],[15,16],
+      [13,17],[17,18],[18,19],[19,20],[0,17]
+    ];
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1.5;
+    connections.forEach(([a, b]) => {
+      ctx.beginPath();
+      ctx.moveTo(landmarks[a].x * W, landmarks[a].y * H);
+      ctx.lineTo(landmarks[b].x * W, landmarks[b].y * H);
+      ctx.stroke();
+    });
+
+    landmarks.forEach((pt, i) => {
+      const x = pt.x * W, y = pt.y * H;
+      ctx.beginPath();
+      ctx.arc(x, y, i === 4 || i === 8 ? 5 : 3, 0, Math.PI * 2);
+      ctx.fillStyle = i === 4 || i === 8
+        ? 'rgba(255,200,255,0.9)'
+        : 'rgba(255,255,255,0.4)';
+      ctx.fill();
+    });
+  }
+
+  // ---- MediaPipe onResults ----
+  function onResults(results) {
+    landmarksCtx.clearRect(0, 0, landmarksCanvas.width, landmarksCanvas.height);
+
+    // reset badges if no hands
+    let seenRight = false, seenLeft = false;
+
+    if (results.multiHandLandmarks && results.multiHandedness) {
+      results.multiHandLandmarks.forEach((landmarks, idx) => {
+        drawLandmarks(landmarksCtx, landmarks);
+
+        // MediaPipe labels are mirrored for front camera → swap
+        const raw = results.multiHandedness[idx].label;
+        const hand = raw === 'Right' ? 'Left' : 'Right';
+
+        const thumbTip = landmarks[4];
+        const indexTip = landmarks[8];
+
+        const xScreen = indexTip.x * drawingCanvas.width;
+        const yScreen = indexTip.y * drawingCanvas.height;
+
+        const threshold = getPinchThreshold(landmarks);
+        const d = dist(thumbTip, indexTip);
+        const pinching = d < threshold;
+
+        if (hand === 'Right') seenRight = true;
+        if (hand === 'Left')  seenLeft  = true;
+
+        // Move cursor ring
+        const ring = hand === 'Right' ? rightRing : leftRing;
+        moveRing(ring, indexTip.x, indexTip.y, pinching);
+
+        if (pinching) {
+          // Update badge
+          if (hand === 'Right') updateBadge(rightBadge, 'draw');
+          else                  updateBadge(leftBadge,  'erase');
+
+          if (!state.isPinching[hand]) {
+            // First frame of pinch — draw a dot to avoid gap
+            state.isPinching[hand] = true;
+            state.lastPos[hand] = { x: xScreen, y: yScreen };
+
+            drawingCtx.beginPath();
+            if (hand === 'Right') {
+              drawingCtx.globalCompositeOperation = 'source-over';
+              drawingCtx.fillStyle = state.color;
+              drawingCtx.arc(xScreen, yScreen, state.brushSize / 2, 0, Math.PI * 2);
+              drawingCtx.fill();
+            }
+          } else {
+            const prev = state.lastPos[hand];
+            drawingCtx.beginPath();
+            drawingCtx.lineCap = 'round';
+            drawingCtx.lineJoin = 'round';
+
+            if (hand === 'Right') {
+              drawingCtx.globalCompositeOperation = 'source-over';
+              drawingCtx.strokeStyle = state.color;
+              drawingCtx.lineWidth = state.brushSize;
+              drawingCtx.shadowColor = state.color;
+              drawingCtx.shadowBlur = state.brushSize * 1.5;
+              drawingCtx.moveTo(prev.x, prev.y);
+              drawingCtx.lineTo(xScreen, yScreen);
+              drawingCtx.stroke();
+              drawingCtx.shadowBlur = 0;
+              spawnSparkle(xScreen, yScreen, state.color);
+            } else {
+              drawingCtx.globalCompositeOperation = 'destination-out';
+              drawingCtx.lineWidth = 50;
+              drawingCtx.moveTo(prev.x, prev.y);
+              drawingCtx.lineTo(xScreen, yScreen);
+              drawingCtx.stroke();
+            }
+
+            state.lastPos[hand] = { x: xScreen, y: yScreen };
+          }
+        } else {
+          state.isPinching[hand] = false;
+          state.lastPos[hand] = null;
+          if (hand === 'Right') updateBadge(rightBadge, 'idle');
+          else                  updateBadge(leftBadge,  'idle');
+        }
+      });
+    }
+
+    if (!seenRight) {
+      updateBadge(rightBadge, 'idle');
+      rightRing.classList.remove('active');
+      state.isPinching['Right'] = false;
+    }
+    if (!seenLeft) {
+      updateBadge(leftBadge, 'idle');
+      leftRing.classList.remove('active');
+      state.isPinching['Left'] = false;
+    }
+  }
+
+  // ---- MediaPipe setup ----
+  const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+  hands.setOptions({
+    maxNumHands: 2,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.6,
+  });
+  hands.onResults(onResults);
+
+  const camera = new Camera(videoEl, {
+    onFrame: async () => {
+      await hands.send({ image: videoEl });
+    },
+    width: 1280,
+    height: 720,
+  });
+
+  camera.start().then(() => {
+    setTimeout(() => {
+      document.getElementById('loadingOverlay').classList.add('hidden');
+    }, 1200);
+  });
+</script>
+</body>
+</html>
