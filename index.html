@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hand Tracking</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mediapipe/0.10.8/camera_utils/camera_utils.js"></script>
+  <script type="module">
+    import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs";
+
+    const CONNECTIONS = [
+      [0,1],[1,2],[2,3],[3,4],       // thumb
+      [0,5],[5,6],[6,7],[7,8],       // index
+      [0,9],[9,10],[10,11],[11,12],  // middle
+      [0,13],[13,14],[14,15],[15,16],// ring
+      [0,17],[17,18],[18,19],[19,20],// pinky
+      [5,9],[9,13],[13,17]           // palm
+    ];
+
+    const FINGER_TIPS = [4, 8, 12, 16, 20];
+    const FINGER_MIDS = [3, 7, 11, 15, 19];
+    const FINGER_BASES = [2, 6, 10, 14, 18];
+
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const gestureEl = document.getElementById("gesture");
+    const handCountEl = document.getElementById("hand-count");
+    const fpsEl = document.getElementById("fps");
+    const statusEl = document.getElementById("status");
+
+    let landmarker = null;
+    let lastTime = 0;
+    let frameCount = 0;
+    let fps = 0;
+    let fpsTimer = 0;
+
+    async function init() {
+      statusEl.textContent = "กำลังโหลดโมเดล...";
+      const filesetResolver = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/wasm"
+      );
+      landmarker = await HandLandmarker.createFromOptions(filesetResolver, {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+          delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        numHands: 2,
+        minHandDetectionConfidence: 0.5,
+        minHandPresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      statusEl.textContent = "กำลังเปิดกล้อง...";
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, facingMode: "user" } });
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          statusEl.style.display = "none";
+          requestAnimationFrame(detect);
+        };
+      } catch (e) {
+        statusEl.textContent = "❌ ไม่สามารถเข้าถึงกล้องได้ กรุณาอนุญาตการใช้งานกล้อง";
+      }
+    }
+
+    function detectGesture(lm) {
+      const tips = FINGER_TIPS.map(i => lm[i]);
+      const mids = FINGER_MIDS.map(i => lm[i]);
+      const bases = FINGER_BASES.map(i => lm[i]);
+      const wrist = lm[0];
+
+      // Is finger extended? tip higher than base (y is inverted)
+      const thumbOpen = lm[4].x < lm[3].x; // thumb extends sideways
+      const extended = [1,2,3,4].map(i => tips[i].y < bases[i].y);
+      const extCount = extended.filter(Boolean).length + (thumbOpen ? 1 : 0);
+
+      if (!thumbOpen && extended.every(e => !e)) return "✊ Fist";
+      if (thumbOpen && extended.every(e => e)) return "🖐 Open Hand";
+      if (!thumbOpen && extended[0] && !extended[1] && !extended[2] && !extended[3]) return "☝️ Point";
+      if (!thumbOpen && extended[0] && extended[1] && !extended[2] && !extended[3]) return "✌️ Peace";
+      if (!thumbOpen && extended[0] && extended[1] && extended[2] && !extended[3]) return "🤟 Three";
+      if (thumbOpen && !extended[0] && !extended[1] && !extended[2] && extended[3]) return "🤙 Call Me";
+      if (thumbOpen && !extended[0] && !extended[1] && !extended[2] && !extended[3]) return "👍 Thumbs Up";
+      if (extCount === 0) return "✊ Fist";
+      return `🖐 ${extCount} Finger${extCount > 1 ? 's' : ''}`;
+    }
+
+    function drawHand(lm, handedness) {
+      const w = canvas.width;
+      const h = canvas.height;
+
+      const isLeft = handedness === "Left";
+      const primary = isLeft ? "#60efff" : "#bf80ff";
+      const secondary = isLeft ? "#0057ff" : "#7b00ff";
+      const tip = isLeft ? "#ffffff" : "#ffccff";
+
+      // Draw connections
+      ctx.lineCap = "round";
+      CONNECTIONS.forEach(([a, b]) => {
+        const ax = (1 - lm[a].x) * w, ay = lm[a].y * h;
+        const bx = (1 - lm[b].x) * w, by = lm[b].y * h;
+
+        ctx.beginPath();
+        const grad = ctx.createLinearGradient(ax, ay, bx, by);
+        grad.addColorStop(0, primary + "cc");
+        grad.addColorStop(1, secondary + "cc");
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 3;
+        ctx.shadowColor = primary;
+        ctx.shadowBlur = 10;
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+      });
+
+      ctx.shadowBlur = 0;
+
+      // Draw landmarks
+      lm.forEach((pt, i) => {
+        const x = (1 - pt.x) * w;
+        const y = pt.y * h;
+        const isTip = FINGER_TIPS.includes(i);
+        const r = isTip ? 8 : 5;
+
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = isTip ? tip : primary;
+        ctx.shadowColor = primary;
+        ctx.shadowBlur = isTip ? 20 : 12;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Outer ring for tips
+        if (isTip) {
+          ctx.beginPath();
+          ctx.arc(x, y, r + 4, 0, Math.PI * 2);
+          ctx.strokeStyle = primary + "66";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+      });
+    }
+
+    function detect(timestamp) {
+      if (!landmarker || video.readyState < 2) {
+        requestAnimationFrame(detect);
+        return;
+      }
+
+      // FPS
+      frameCount++;
+      if (timestamp - fpsTimer > 1000) {
+        fps = frameCount;
+        frameCount = 0;
+        fpsTimer = timestamp;
+        fpsEl.textContent = `${fps} FPS`;
+      }
+
+      const result = landmarker.detectForVideo(video, timestamp);
+
+      // Clear
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Dark overlay
+      ctx.fillStyle = "rgba(0,0,0,0.25)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const hands = result.landmarks || [];
+      handCountEl.textContent = `${hands.length} มือ`;
+
+      const gestures = [];
+      hands.forEach((lm, i) => {
+        const handedness = result.handedness?.[i]?.[0]?.categoryName || "Right";
+        drawHand(lm, handedness);
+        gestures.push(detectGesture(lm));
+      });
+
+      if (gestures.length > 0) {
+        gestureEl.textContent = gestures.join("  ");
+        gestureEl.style.opacity = "1";
+      } else {
+        gestureEl.style.opacity = "0.3";
+        gestureEl.textContent = "ยกมือขึ้น";
+      }
+
+      requestAnimationFrame(detect);
+    }
+
+    init();
+  </script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #050508;
+      color: #fff;
+      font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    #title {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 13px;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.35);
+      z-index: 10;
+      white-space: nowrap;
+    }
+
+    #canvas-wrap {
+      position: relative;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 0 60px rgba(96,239,255,0.08), 0 0 0 1px rgba(255,255,255,0.06);
+      max-width: min(1280px, 95vw);
+      max-height: 80vh;
+      aspect-ratio: 16/9;
+    }
+
+    video {
+      display: none;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #hud {
+      position: fixed;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      background: rgba(10,10,20,0.75);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 999px;
+      padding: 14px 28px;
+      z-index: 10;
+    }
+
+    #gesture {
+      font-size: 22px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      transition: opacity 0.2s;
+      min-width: 160px;
+      text-align: center;
+    }
+
+    .divider {
+      width: 1px;
+      height: 20px;
+      background: rgba(255,255,255,0.12);
+    }
+
+    .meta {
+      font-size: 12px;
+      color: rgba(255,255,255,0.4);
+      letter-spacing: 0.05em;
+    }
+
+    .meta span {
+      color: rgba(255,255,255,0.75);
+      font-weight: 500;
+    }
+
+    #status {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      color: rgba(255,255,255,0.5);
+      letter-spacing: 0.05em;
+      z-index: 20;
+      background: #050508;
+    }
+
+    .dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #60efff;
+      margin-right: 10px;
+      animation: pulse 1.2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.2; }
+    }
+  </style>
+</head>
+<body>
+  <div id="title">Hand Tracking — MediaPipe</div>
+
+  <div id="canvas-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <div id="hud">
+    <div id="gesture">ยกมือขึ้น</div>
+    <div class="divider"></div>
+    <div class="meta"><span id="hand-count">0 มือ</span></div>
+    <div class="divider"></div>
+    <div class="meta"><span id="fps">— FPS</span></div>
+  </div>
+
+  <div id="status"><span class="dot"></span>กำลังโหลด...</div>
+</body>
+</html>
